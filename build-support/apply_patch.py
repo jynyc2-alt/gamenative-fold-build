@@ -7,10 +7,11 @@ import sys
 root = Path(sys.argv[1] if len(sys.argv) > 1 else 'GameNative')
 xserver = root / 'app/src/main/java/app/gamenative/ui/screen/xserver/XServerScreen.kt'
 gradle = root / 'app/build.gradle.kts'
+evshim = root / 'app/src/main/cpp/evshim/evshim.c'
 controller_src = Path(__file__).resolve().parent / 'FoldRearTriggerController.java'
 controller_dst = root / 'app/src/main/java/app/gamenative/ui/screen/xserver/FoldRearTriggerController.java'
 
-if not xserver.exists() or not gradle.exists():
+if not xserver.exists() or not gradle.exists() or not evshim.exists():
     raise SystemExit(f'GameNative source not found under {root}')
 
 shutil.copy2(controller_src, controller_dst)
@@ -68,6 +69,19 @@ if fold_id not in g:
 
 gradle.write_text(g, encoding='utf-8')
 
+# The native evshim controller bridge has a fallback path hardcoded to the official
+# package. In a side-by-side install that makes Wine/SDL read the official app's
+# gamepad_shm while Java writes the Fold app's gamepad_shm, so Android controls still
+# haptic/animate but the game sees no input. Point the native fallback at this package.
+e = evshim.read_text(encoding='utf-8')
+official_shm_base = '        base = "/data/data/app.gamenative/files";\n'
+fold_shm_base = '        base = "/data/data/app.gamenative.foldtriggers/files";\n'
+if fold_shm_base not in e:
+    if e.count(official_shm_base) != 1:
+        raise SystemExit(f'evshim base path: expected exactly one official path, found {e.count(official_shm_base)}')
+    e = e.replace(official_shm_base, fold_shm_base, 1)
+evshim.write_text(e, encoding='utf-8')
+
 # Make the launcher label distinct in every shipped locale. The FileProvider authority
 # already uses ${applicationId}, so it also becomes unique automatically.
 name_pattern = re.compile(r'(<string\s+name="app_name"[^>]*>)(.*?)(</string>)')
@@ -82,4 +96,4 @@ for strings_file in sorted((root / 'app/src/main/res').glob('values*/strings.xml
 if changed_names == 0:
     raise SystemExit('app name: no app_name resources found')
 
-print(f'Fold rear-display LT/RT side-by-side patch applied successfully ({changed_names} app labels updated).')
+print(f'Fold side-by-side patch applied: rear LT/RT + native input path fixed ({changed_names} app labels updated).')
