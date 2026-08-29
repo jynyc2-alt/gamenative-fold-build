@@ -14,29 +14,29 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Download fixed side-by-side APK artifact
+      - name: Download comprehensive side-by-side APK artifact
         uses: actions/download-artifact@v4
         with:
           name: gamenative-fold-cover-LT-RT
           path: artifact
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: jynyc2-alt/gamenative-fold-build
-          run-id: 33277326751
+          run-id: 33278514759
 
       - name: Verify and rename downloaded APK
         run: |
           ls -lh artifact
           test -s artifact/gamenative-current-fold-cover-LT-RT.apk
-          mv artifact/gamenative-current-fold-cover-LT-RT.apk artifact/gamenative-fold-side-by-side-inputfix-LT-RT.apk
+          mv artifact/gamenative-current-fold-cover-LT-RT.apk artifact/gamenative-fold-side-by-side-comprehensive-inputfix-LT-RT.apk
 
-      - name: Publish fixed side-by-side GitHub Release
+      - name: Publish comprehensive input-fix GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete fold-cover-lt-rt-side-by-side-inputfix-20260829 --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
-          gh release create fold-cover-lt-rt-side-by-side-inputfix-20260829 \
-            artifact/gamenative-fold-side-by-side-inputfix-LT-RT.apk \
+          gh release delete fold-cover-lt-rt-side-by-side-comprehensive-inputfix-20260829 --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release create fold-cover-lt-rt-side-by-side-comprehensive-inputfix-20260829 \
+            artifact/gamenative-fold-side-by-side-comprehensive-inputfix-LT-RT.apk \
             --repo "$GITHUB_REPOSITORY" \
             --target main \
-            --title "GameNative Fold Side-by-Side LT + RT - Input Fix" \
-            --notes "Fixed side-by-side GameNative Fold build using application ID app.gamenative.foldtriggers. This version also patches GameNative's native evshim shared-memory fallback from /data/data/app.gamenative/files to /data/data/app.gamenative.foldtriggers/files, restoring inner-screen virtual controls and rear LT/RT input in the side-by-side package. Launcher name is GameNative Fold. Built from GameNative commit b69458827f4c924242bf7706e1b7f3d0760eac68."
+            --title "GameNative Fold Side-by-Side LT + RT - Comprehensive Input Fix" \
+            --notes "Side-by-side GameNative Fold build using application ID app.gamenative.foldtriggers. This version rewrites all runtime absolute /data/data/app.gamenative app-private paths to the Fold package and explicitly injects EVSHIM_BASE_PATH from Android Context.getFilesDir() into the Wine-side evshim preload. This is intended to keep inner on-screen virtual gamepad state, JNI futex notification, shared-memory gamepad files and rear LT/RT input on the same side-by-side package path. Launcher name is GameNative Fold. Built from GameNative commit b69458827f4c924242bf7706e1b7f3d0760eac68."
