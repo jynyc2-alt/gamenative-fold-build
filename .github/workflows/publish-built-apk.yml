@@ -1,0 +1,47 @@
+name: Publish built Fold APK
+
+on:
+  push:
+    paths:
+      - '.github/workflows/publish-built-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download successful APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gamenative-fold-cover-LT-RT
+          path: artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: jynyc2-alt/gamenative-fold-build
+          run-id: 33268605998
+
+      - name: Verify downloaded APK exists
+        run: |
+          ls -lh artifact
+          test -s artifact/gamenative-current-fold-cover-LT-RT.apk
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete fold-cover-lt-rt-20260829 --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          git init release-tmp >/dev/null
+          cd release-tmp
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git commit --allow-empty -m "GameNative Fold LT RT release" >/dev/null
+          cd ..
+          gh release create fold-cover-lt-rt-20260829 \
+            artifact/gamenative-current-fold-cover-LT-RT.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "GameNative Fold Cover LT + RT" \
+            --notes "GameNative build with Galaxy Fold rear/cover-screen LT/L2 and RT/R2 touch controls. Left half is LT/L2, right half is RT/R2, and both can be held simultaneously. Built from GameNative commit b69458827f4c924242bf7706e1b7f3d0760eac68."
