@@ -1,0 +1,98 @@
+name: Build GameNative Side-by-Side Baseline Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-baseline-diagnostic.yml'
+      - 'diagnostic/**'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+
+      - name: Check out GameNative baseline
+        uses: actions/checkout@v4
+        with:
+          repository: utkarshdalal/GameNative
+          ref: b69458827f4c924242bf7706e1b7f3d0760eac68
+          path: GameNative
+
+      - name: Apply side-by-side baseline diagnostic patch
+        run: python3 harness/diagnostic/apply_baseline_patch.py GameNative
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Inject non-production build credentials
+        working-directory: GameNative
+        run: |
+          cat <<'EOF' > local.properties
+          POSTHOG_API_KEY=dummy
+          POSTHOG_HOST=https://us.i.posthog.com
+          STEAMGRIDDB_API_KEY=dummy
+          CLOUD_PROJECT_NUMBER=dummy
+          EOF
+
+      - name: Ensure Android SDK components
+        shell: bash
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;34.0.0" "ndk;27.3.13750724"
+
+      - name: Build standard bundle
+        working-directory: GameNative
+        run: ./gradlew :app:bundleLegacyRelease --stacktrace
+
+      - name: Create APK signing key
+        run: |
+          keytool -genkeypair -v -keystore baseline.keystore -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=GameNative Fold Baseline,O=Local,C=US"
+
+      - name: Convert bundle to universal APK
+        run: |
+          java -jar GameNative/tools/bundletool-all-1.17.2.jar build-apks \
+            --bundle=GameNative/app/build/outputs/bundle/legacyRelease/app-legacy-release.aab \
+            --output=baseline.apks --mode=universal \
+            --ks=baseline.keystore --ks-pass=pass:android \
+            --ks-key-alias=androiddebugkey --key-pass=pass:android
+          unzip -p baseline.apks universal.apk > gamenative-fold-baseline-diagnostic.apk
+          test -s gamenative-fold-baseline-diagnostic.apk
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          if [ ! -x "$APKSIGNER" ]; then APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"; fi
+          "$APKSIGNER" verify --verbose gamenative-fold-baseline-diagnostic.apk
+
+      - name: Publish diagnostic release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete fold-baseline-diagnostic-20260829 --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release create fold-baseline-diagnostic-20260829 \
+            gamenative-fold-baseline-diagnostic.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "GameNative Fold Baseline Diagnostic" \
+            --notes "Diagnostic side-by-side package app.gamenative.foldbaseline. Contains NO rear-display/WindowArea code. Package-private runtime paths are rewritten for side-by-side operation. Use only to test whether GameNative inner on-screen virtual A/B/D-pad controls work when the Fold rear-screen integration is absent."
