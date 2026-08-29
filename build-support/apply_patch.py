@@ -7,11 +7,11 @@ import sys
 root = Path(sys.argv[1] if len(sys.argv) > 1 else 'GameNative')
 xserver = root / 'app/src/main/java/app/gamenative/ui/screen/xserver/XServerScreen.kt'
 gradle = root / 'app/build.gradle.kts'
-evshim = root / 'app/src/main/cpp/evshim/evshim.c'
+bionic = root / 'app/src/main/java/com/winlator/xenvironment/components/BionicProgramLauncherComponent.java'
 controller_src = Path(__file__).resolve().parent / 'FoldRearTriggerController.java'
 controller_dst = root / 'app/src/main/java/app/gamenative/ui/screen/xserver/FoldRearTriggerController.java'
 
-if not xserver.exists() or not gradle.exists() or not evshim.exists():
+if not xserver.exists() or not gradle.exists() or not bionic.exists():
     raise SystemExit(f'GameNative source not found under {root}')
 
 shutil.copy2(controller_src, controller_dst)
@@ -58,8 +58,7 @@ if dep not in g:
         raise SystemExit(f'window dependency: expected exactly one anchor, found {g.count(anchor)}')
     g = g.replace(anchor, anchor + '\n    // Fold cover/rear-display trigger controls\n' + dep, 1)
 
-# Give the modified build a different Android application ID so it installs alongside
-# the official app.gamenative package. Keep the namespace/source packages unchanged.
+# Separate Android package so this build installs alongside official GameNative.
 official_id = '        applicationId = "app.gamenative"\n'
 fold_id = '        applicationId = "app.gamenative.foldtriggers"\n'
 if fold_id not in g:
@@ -69,21 +68,44 @@ if fold_id not in g:
 
 gradle.write_text(g, encoding='utf-8')
 
-# The native evshim controller bridge has a fallback path hardcoded to the official
-# package. In a side-by-side install that makes Wine/SDL read the official app's
-# gamepad_shm while Java writes the Fold app's gamepad_shm, so Android controls still
-# haptic/animate but the game sees no input. Point the native fallback at this package.
-e = evshim.read_text(encoding='utf-8')
-official_shm_base = '        base = "/data/data/app.gamenative/files";\n'
-fold_shm_base = '        base = "/data/data/app.gamenative.foldtriggers/files";\n'
-if fold_shm_base not in e:
-    if e.count(official_shm_base) != 1:
-        raise SystemExit(f'evshim base path: expected exactly one official path, found {e.count(official_shm_base)}')
-    e = e.replace(official_shm_base, fold_shm_base, 1)
-evshim.write_text(e, encoding='utf-8')
+# GameNative contains several absolute app-private paths baked around the official
+# package name. A side-by-side applicationId means those paths point into the other
+# installed app. Rewrite every app-private absolute path in main sources/resources so
+# Wine, evshim, media helpers, drives, etc. all remain inside this Fold package.
+official_private = '/data/data/app.gamenative'
+fold_private = '/data/data/app.gamenative.foldtriggers'
+path_replacements = 0
+for p in (root / 'app/src/main').rglob('*'):
+    if not p.is_file() or p.suffix.lower() not in {'.java', '.kt', '.c', '.h', '.cpp', '.xml', '.txt', '.sh'}:
+        continue
+    try:
+        s = p.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        continue
+    count = s.count(official_private)
+    if count:
+        p.write_text(s.replace(official_private, fold_private), encoding='utf-8')
+        path_replacements += count
 
-# Make the launcher label distinct in every shipped locale. The FileProvider authority
-# already uses ${applicationId}, so it also becomes unique automatically.
+if path_replacements == 0:
+    raise SystemExit('package path rewrite: found no /data/data/app.gamenative references')
+
+# Do not rely on evshim's compiled fallback path in the Wine process. Explicitly tell
+# the guest preload which Android files directory owns gamepad_shm. This makes the
+# Java MappedByteBuffer, JNI futex notifier and Wine/SDL reader converge on one path.
+b = bionic.read_text(encoding='utf-8')
+env_anchor = (
+    '        EnvVars envVars = new EnvVars();\n\n'
+    '        // Use the ControllerManager\'s dynamic count for the environment variable\n'
+)
+env_insert = '        envVars.put("EVSHIM_BASE_PATH", context.getFilesDir().getAbsolutePath());\n'
+if env_insert.strip() not in b:
+    if b.count(env_anchor) != 1:
+        raise SystemExit(f'EVSHIM_BASE_PATH: expected exactly one env anchor, found {b.count(env_anchor)}')
+    b = b.replace(env_anchor, env_anchor + env_insert, 1)
+    bionic.write_text(b, encoding='utf-8')
+
+# Make launcher name unmistakable in every shipped locale.
 name_pattern = re.compile(r'(<string\s+name="app_name"[^>]*>)(.*?)(</string>)')
 changed_names = 0
 for strings_file in sorted((root / 'app/src/main/res').glob('values*/strings.xml')):
@@ -96,4 +118,7 @@ for strings_file in sorted((root / 'app/src/main/res').glob('values*/strings.xml
 if changed_names == 0:
     raise SystemExit('app name: no app_name resources found')
 
-print(f'Fold side-by-side patch applied: rear LT/RT + native input path fixed ({changed_names} app labels updated).')
+print(
+    'Fold side-by-side patch applied: rear LT/RT + package-aware guest/input paths '
+    f'({path_replacements} absolute paths, {changed_names} app labels updated).'
+)
