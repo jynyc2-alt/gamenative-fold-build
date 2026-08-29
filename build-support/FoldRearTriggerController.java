@@ -12,6 +12,7 @@ import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.util.Consumer;
 import androidx.window.core.ExperimentalWindowApi;
 import androidx.window.area.WindowArea;
 import androidx.window.area.WindowAreaCapability;
@@ -30,7 +31,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
-import java.util.function.Consumer;
 
 /**
  * Uses Jetpack WindowArea presentation to turn a foldable's rear/cover display into
