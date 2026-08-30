@@ -1,4 +1,4 @@
-name: Build GameNative Fold LT-RT APK
+name: Build GameNative Fold Editable APK
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
       - 'build-support/**'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -21,17 +21,20 @@ jobs:
         with:
           path: harness
 
-      - name: Check out current GameNative baseline
+      - name: Check out GameNative baseline
         uses: actions/checkout@v4
         with:
           repository: utkarshdalal/GameNative
           ref: b69458827f4c924242bf7706e1b7f3d0760eac68
           path: GameNative
 
-      - name: Apply Fold cover-screen trigger patch
+      - name: Apply Fold editable cover-screen patch
         run: |
           python3 harness/build-support/apply_patch.py GameNative
           python3 harness/build-support/apply_host_evshim_fix.py GameNative
+          grep -F 'applicationId = "app.gamenative.foldtriggers"' GameNative/app/build.gradle.kts
+          grep -F 'versionCode = 2301' GameNative/app/build.gradle.kts
+          grep -F 'EVSHIM_BASE_PATH' GameNative/app/src/main/java/app/gamenative/PluviaApp.kt
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -65,47 +68,88 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;34.0.0" "ndk;27.3.13750724"
 
-      - name: Build standard GameNative bundle
+      - name: Build GameNative bundle
         working-directory: GameNative
         run: ./gradlew :app:bundleLegacyRelease --stacktrace
 
-      - name: Create local APK signing key
+      # The previous Fold builds generated a new key on every run, preventing Android
+      # from accepting updates. Starting with fold.1, use the pinned Android AOSP test
+      # certificate so the signing identity is deterministic on every CI run.
+      # This is intentionally a development/sideload certificate, not a production secret.
+      - name: Prepare stable development signing certificate
+        shell: bash
         run: |
-          keytool -genkeypair -v \
-            -keystore fold-debug.keystore \
-            -storepass android \
-            -keypass android \
-            -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=GameNative Fold Build,O=Local,C=US"
+          curl -fL \
+            https://raw.githubusercontent.com/aosp-mirror/platform_build/android-16.0.0_r1/target/product/security/testkey.pk8 \
+            -o testkey.pk8
+          curl -fL \
+            https://raw.githubusercontent.com/aosp-mirror/platform_build/android-16.0.0_r1/target/product/security/testkey.x509.pem \
+            -o testkey.x509.pem
+          openssl pkcs8 -inform DER -nocrypt -in testkey.pk8 -out testkey.pem
+          openssl pkcs12 -export \
+            -inkey testkey.pem \
+            -in testkey.x509.pem \
+            -name foldstable \
+            -out fold-stable.p12 \
+            -passout pass:android
+          keytool -importkeystore -noprompt \
+            -srckeystore fold-stable.p12 \
+            -srcstoretype PKCS12 \
+            -srcstorepass android \
+            -srcalias foldstable \
+            -destkeystore fold-stable.keystore \
+            -deststoretype JKS \
+            -deststorepass android \
+            -destkeypass android \
+            -destalias foldstable
+          keytool -list -v -keystore fold-stable.keystore -storepass android -alias foldstable | grep -E 'SHA256|Valid from'
 
-      - name: Convert bundle to universal installable APK
+      - name: Convert bundle to stable-signed universal APK
         shell: bash
         run: |
           java -jar GameNative/tools/bundletool-all-1.17.2.jar build-apks \
             --bundle=GameNative/app/build/outputs/bundle/legacyRelease/app-legacy-release.aab \
             --output=gamenative-fold.apks \
             --mode=universal \
-            --ks=fold-debug.keystore \
+            --ks=fold-stable.keystore \
             --ks-pass=pass:android \
-            --ks-key-alias=androiddebugkey \
+            --ks-key-alias=foldstable \
             --key-pass=pass:android
-          unzip -p gamenative-fold.apks universal.apk > gamenative-current-fold-cover-LT-RT.apk
-          test -s gamenative-current-fold-cover-LT-RT.apk
+          unzip -p gamenative-fold.apks universal.apk > gamenative-fold-editable-v1.apk
+          test -s gamenative-fold-editable-v1.apk
 
-      - name: Verify APK signature
+      - name: Verify APK signature and package metadata
         shell: bash
         run: |
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
           if [ ! -x "$APKSIGNER" ]; then
             APKSIGNER="$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
           fi
-          "$APKSIGNER" verify --verbose gamenative-current-fold-cover-LT-RT.apk
+          "$APKSIGNER" verify --verbose --print-certs gamenative-fold-editable-v1.apk
 
-      - name: Upload APK
+          AAPT="$ANDROID_HOME/build-tools/34.0.0/aapt"
+          if [ ! -x "$AAPT" ]; then
+            AAPT="$ANDROID_SDK_ROOT/build-tools/34.0.0/aapt"
+          fi
+          "$AAPT" dump badging gamenative-fold-editable-v1.apk | head -n 3
+          "$AAPT" dump badging gamenative-fold-editable-v1.apk | grep -F "package: name='app.gamenative.foldtriggers' versionCode='2301'"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gamenative-fold-cover-LT-RT
-          path: gamenative-current-fold-cover-LT-RT.apk
+          name: gamenative-fold-editable-v1
+          path: gamenative-fold-editable-v1.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
+
+      - name: Publish editable-layout release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete fold-editable-layout-v1-20260829 --repo "$GITHUB_REPOSITORY" --yes >/dev/null 2>&1 || true
+          gh release create fold-editable-layout-v1-20260829 \
+            gamenative-fold-editable-v1.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target main \
+            --title "GameNative Fold - Editable LT/RT Layout v1" \
+            --notes "GameNative Fold side-by-side build, package app.gamenative.foldtriggers, versionCode 2301 / versionName 1.2.0-fold.1. Keeps the working host EVSHIM fix. Cover-screen default is corrected to RT/R2 on the left and LT/L2 on the right. Adds an Edit button with drag-to-move, corner drag-to-resize, Save, Reset and Cancel; saved layout uses normalized coordinates and persists in app preferences. Starting with this release, builds use the same pinned AOSP Android development test certificate so later Fold APKs can be installed in place as long as versionCode increases. Because the immediately previous Fold APK was signed by a one-off ephemeral key, moving to this stable signing line requires one final uninstall/reinstall."

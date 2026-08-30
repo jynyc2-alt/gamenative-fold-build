@@ -40,7 +40,7 @@ text = insert_once(
     'rear controller cleanup',
 )
 
-hook = '''\n            // Galaxy Fold-style dual display: keep the game on the primary/inner screen and\n            // automatically present a dedicated LT/RT touch surface on the rear/cover screen.\n            if (activity != null && rearTriggerController == null) {\n                rearTriggerController = FoldRearTriggerController(\n                    activity,\n                    icView,\n                    xServerView.getxServer().winHandler,\n                ).also { it.start() }\n            }\n'''
+hook = '''\n            // Galaxy Fold-style dual display: keep the game on the primary/inner screen and\n            // automatically present configurable LT/RT touch controls on the cover screen.\n            if (activity != null && rearTriggerController == null) {\n                rearTriggerController = FoldRearTriggerController(\n                    activity,\n                    icView,\n                    xServerView.getxServer().winHandler,\n                ).also { it.start() }\n            }\n'''
 text = insert_once(
     text,
     '            xServerView.getxServer().winHandler.setInputControlsView(PluviaApp.inputControlsView)\n',
@@ -66,6 +66,15 @@ if fold_id not in g:
         raise SystemExit(f'applicationId: expected exactly one official ID, found {g.count(official_id)}')
     g = g.replace(official_id, fold_id, 1)
 
+# Fold-specific monotonically increasing version. Future in-place upgrades must use a
+# larger versionCode while retaining the same package ID and signing certificate.
+official_version = '        versionCode = 22\n        versionName = "1.2.0"\n'
+fold_version = '        versionCode = 2301\n        versionName = "1.2.0-fold.1"\n'
+if fold_version not in g:
+    if g.count(official_version) != 1:
+        raise SystemExit(f'version: expected one stock version block, found {g.count(official_version)}')
+    g = g.replace(official_version, fold_version, 1)
+
 gradle.write_text(g, encoding='utf-8')
 
 # GameNative contains several absolute app-private paths baked around the official
@@ -90,9 +99,9 @@ for p in (root / 'app/src/main').rglob('*'):
 if path_replacements == 0:
     raise SystemExit('package path rewrite: found no /data/data/app.gamenative references')
 
-# Do not rely on evshim's compiled fallback path in the Wine process. Explicitly tell
-# the guest preload which Android files directory owns gamepad_shm. This makes the
-# Java MappedByteBuffer, JNI futex notifier and Wine/SDL reader converge on one path.
+# Explicitly tell the Wine-side evshim preload which Android files directory owns
+# gamepad_shm. The separate host-process initialization fix is applied by
+# apply_host_evshim_fix.py before native libraries are preloaded.
 b = bionic.read_text(encoding='utf-8')
 env_anchor = (
     '        EnvVars envVars = new EnvVars();\n\n'
@@ -119,6 +128,6 @@ if changed_names == 0:
     raise SystemExit('app name: no app_name resources found')
 
 print(
-    'Fold side-by-side patch applied: rear LT/RT + package-aware guest/input paths '
-    f'({path_replacements} absolute paths, {changed_names} app labels updated).'
+    'Fold side-by-side patch applied: editable rear LT/RT + package-aware input paths + '
+    f'versionCode 2301 ({path_replacements} absolute paths, {changed_names} app labels updated).'
 )
